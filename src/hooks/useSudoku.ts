@@ -30,7 +30,7 @@ export function useSudoku(initialDifficulty: Difficulty = 'easy') {
   const conflicts = useMemo(() => findConflicts(board), [board]);
   const solved = useMemo(() => isBoardSolved(board), [board]);
 
-  // Puzzle generation can take up to ~1s for hard puzzles. Running it
+  // Puzzle generation can take a few hundred ms on slow devices. Running it
   // synchronously would freeze the whole UI with no feedback, so it's
   // deferred a tick behind `isGenerating` flipping on, letting a spinner
   // paint first instead of the page silently hanging.

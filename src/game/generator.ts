@@ -23,10 +23,19 @@ const PROFILES: Record<Difficulty, DifficultyProfile> = {
 };
 
 const TOTAL_CELLS = SIZE * SIZE;
-const MAX_DIG_ATTEMPTS = 4;
+/**
+ * Roughly 40% of medium/hard digs never need guessing at any givens count,
+ * so they can't produce an in-range candidate; generation therefore keeps
+ * retrying with fresh solutions. A dig takes ~20-30ms on desktop, so the attempt cap and time
+ * budget below keep a worst-case generation well under a second while making
+ * a miss (falling back to the closest candidate) vanishingly rare.
+ */
+const MAX_DIG_ATTEMPTS = 20;
+const TIME_BUDGET_MS = 600;
 
 interface DigResult {
   puzzle: Grid;
+  solution: Grid;
   /** True if `puzzle` actually landed inside the target's step range. */
   inRange: boolean;
   /** True if `puzzle` at least needs the same kind of solving as the target (guessing vs. pure logic). */
@@ -52,6 +61,7 @@ function digOnce(solution: Grid, profile: DifficultyProfile): DigResult[] {
 
     results.push({
       puzzle,
+      solution,
       inRange,
       matchesCharacter: !wantsGuessing || steps > 0,
       distance,
@@ -67,24 +77,28 @@ function digOnce(solution: Grid, profile: DifficultyProfile): DigResult[] {
  * candidate's actual solving difficulty (`estimateSearchSteps`), picking one
  * whose step count lands in the target's range.
  *
- * A single dig occasionally stays logically solvable all the way down (no
- * candidate ever needs guessing), which would misrepresent a "medium"/"hard"
- * request as trivial — so when that happens the whole dig is retried with a
- * fresh removal order before falling back to the closest miss.
+ * A single dig often stays logically solvable all the way down (no candidate
+ * ever needs guessing), which would misrepresent a "medium"/"hard" request
+ * as trivial — so when no candidate lands in range, it retries with a fresh
+ * solution and removal order (up to `MAX_DIG_ATTEMPTS` / `TIME_BUDGET_MS`)
+ * before falling back to the closest miss that at least needs the same kind
+ * of solving.
  */
 export function generatePuzzle(difficulty: Difficulty): SudokuPuzzle {
   const profile = PROFILES[difficulty];
-  const solution = generateSolvedGrid();
+  const deadline = performance.now() + TIME_BUDGET_MS;
 
   let bestMatchingCharacter: DigResult | null = null;
   let bestAny: DigResult | null = null;
 
   for (let attempt = 0; attempt < MAX_DIG_ATTEMPTS; attempt++) {
-    const results = digOnce(solution, profile);
+    if (attempt > 0 && performance.now() > deadline) break;
+    const results = digOnce(generateSolvedGrid(), profile);
 
     const inRange = results.filter((r) => r.inRange);
     if (inRange.length > 0) {
-      return { puzzle: inRange[Math.floor(Math.random() * inRange.length)].puzzle, solution, difficulty };
+      const pick = inRange[Math.floor(Math.random() * inRange.length)];
+      return { puzzle: pick.puzzle, solution: pick.solution, difficulty };
     }
 
     for (const result of results) {
@@ -93,15 +107,16 @@ export function generatePuzzle(difficulty: Difficulty): SudokuPuzzle {
         bestMatchingCharacter = result;
       }
     }
-
-    // Already found a close, same-character miss — not worth another full dig.
-    if (bestMatchingCharacter && bestMatchingCharacter.distance <= 50) break;
   }
 
-  const puzzle =
-    bestMatchingCharacter?.puzzle ??
-    bestAny?.puzzle ??
-    applyRemovalOrder(solution, digHolesOrdered(solution, profile.minGivens), TOTAL_CELLS - profile.seedGivens);
+  const best = bestMatchingCharacter ?? bestAny;
+  if (best) return { puzzle: best.puzzle, solution: best.solution, difficulty };
 
+  const solution = generateSolvedGrid();
+  const puzzle = applyRemovalOrder(
+    solution,
+    digHolesOrdered(solution, profile.minGivens),
+    TOTAL_CELLS - profile.seedGivens,
+  );
   return { puzzle, solution, difficulty };
 }

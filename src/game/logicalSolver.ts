@@ -3,18 +3,30 @@ import type { Grid } from './types';
 
 type CellRef = [row: number, col: number];
 
-function candidatesAt(grid: Grid, row: number, col: number): number[] {
-  const used = new Set<number>();
-  for (let i = 0; i < SIZE; i++) {
-    used.add(grid[row][i]);
-    used.add(grid[i][col]);
-  }
+/** Bit `d` (1-9) set = digit `d` is still a legal candidate for this cell. */
+const ALL_CANDIDATES = 0b11_1111_1110;
+
+function candidateMask(grid: Grid, row: number, col: number): number {
+  let used = 0;
+  for (let i = 0; i < SIZE; i++) used |= (1 << grid[row][i]) | (1 << grid[i][col]);
   const boxRow = Math.floor(row / BOX_SIZE) * BOX_SIZE;
   const boxCol = Math.floor(col / BOX_SIZE) * BOX_SIZE;
   for (let r = boxRow; r < boxRow + BOX_SIZE; r++) {
-    for (let c = boxCol; c < boxCol + BOX_SIZE; c++) used.add(grid[r][c]);
+    for (let c = boxCol; c < boxCol + BOX_SIZE; c++) used |= 1 << grid[r][c];
   }
-  return DIGITS.filter((d) => !used.has(d));
+  return ALL_CANDIDATES & ~used;
+}
+
+/** Candidates in ascending order (the backtracking step count depends on this order). */
+function candidatesAt(grid: Grid, row: number, col: number): number[] {
+  const mask = candidateMask(grid, row, col);
+  return DIGITS.filter((d) => mask & (1 << d));
+}
+
+/** Returns the digit if `mask` has exactly one candidate bit set, otherwise 0. */
+function singleDigit(mask: number): number {
+  if (mask === 0 || (mask & (mask - 1)) !== 0) return 0;
+  return 31 - Math.clz32(mask);
 }
 
 function collectUnits(): CellRef[][] {
@@ -43,9 +55,9 @@ function applyNakedSingles(grid: Grid): boolean {
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
       if (grid[r][c] !== 0) continue;
-      const candidates = candidatesAt(grid, r, c);
-      if (candidates.length === 1) {
-        grid[r][c] = candidates[0];
+      const digit = singleDigit(candidateMask(grid, r, c));
+      if (digit !== 0) {
+        grid[r][c] = digit;
         progress = true;
       }
     }
@@ -56,22 +68,29 @@ function applyNakedSingles(grid: Grid): boolean {
 /** "Hidden single": a digit that can only go in one cell within a row/column/box. */
 function applyHiddenSingles(grid: Grid): boolean {
   let progress = false;
+  const masks = new Array<number>(SIZE);
   for (const unit of UNITS) {
+    unit.forEach(([r, c], i) => {
+      masks[i] = grid[r][c] === 0 ? candidateMask(grid, r, c) : 0;
+    });
     for (const digit of DIGITS) {
-      let spot: CellRef | null = null;
+      const bit = 1 << digit;
+      let spot = -1;
       let count = 0;
-      for (const [r, c] of unit) {
-        if (grid[r][c] !== 0) continue;
-        if (candidatesAt(grid, r, c).includes(digit)) {
+      for (let i = 0; i < SIZE; i++) {
+        if (masks[i] & bit) {
           count++;
-          spot = [r, c];
+          spot = i;
           if (count > 1) break;
         }
       }
-      if (count === 1 && spot) {
-        const [r, c] = spot;
+      if (count === 1) {
+        const [r, c] = unit[spot];
         grid[r][c] = digit;
         progress = true;
+        // Keep this unit's masks in sync: the cell is filled, and no other
+        // cell here could hold `digit` anyway (it had exactly one spot).
+        masks[spot] = 0;
       }
     }
   }

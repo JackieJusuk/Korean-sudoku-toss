@@ -1,4 +1,5 @@
 import { BOX_SIZE, DIGITS, SIZE } from './constants';
+import { logicalSolveGap } from './logicalSolver';
 import type { Grid } from './types';
 
 export function createEmptyGrid(): Grid {
@@ -26,33 +27,6 @@ function findEmptyCell(grid: Grid): [number, number] | null {
     }
   }
   return null;
-}
-
-interface CandidateCell {
-  row: number;
-  col: number;
-  candidates: number[];
-}
-
-/**
- * Finds the empty cell with the fewest legal candidates ("minimum remaining
- * values" heuristic). Branching on this cell first — instead of the first
- * empty cell found — keeps backtracking searches from blowing up on sparse
- * grids, which matters a lot for `countSolutions` on a near-final puzzle.
- */
-function findMinCandidateCell(grid: Grid): CandidateCell | null {
-  let best: CandidateCell | null = null;
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      if (grid[r][c] !== 0) continue;
-      const candidates = DIGITS.filter((d) => canPlace(grid, r, c, d));
-      if (!best || candidates.length < best.candidates.length) {
-        best = { row: r, col: c, candidates };
-        if (candidates.length <= 1) return best; // can't do better than a forced/dead cell
-      }
-    }
-  }
-  return best;
 }
 
 function shuffled<T>(items: readonly T[]): T[] {
@@ -86,15 +60,45 @@ export function generateSolvedGrid(): Grid {
   return grid;
 }
 
+const ALL_CANDIDATES = 0b11_1111_1110; // bits 1-9
+
+function popcount(mask: number): number {
+  let count = 0;
+  for (let m = mask; m !== 0; m &= m - 1) count++;
+  return count;
+}
+
 /**
  * Counts solutions up to `limit`, stopping early once reached (used for
- * uniqueness checks). Uses the minimum-remaining-candidates heuristic to
- * keep branching small, plus a hard node budget so a single check can never
- * hang — if the budget is exhausted, returns `limit + 1` (a value that can
- * never equal a real solution count) so callers treat it as "not verified
- * unique" rather than risking a false positive.
+ * uniqueness checks). Branches on the empty cell with the fewest legal
+ * candidates ("minimum remaining values" heuristic) — instead of the first
+ * empty cell — which keeps the search from blowing up on sparse grids, and
+ * tracks used digits per row/column/box as bitmasks so each step is cheap.
+ * A hard node budget means a single check can never hang: if the budget is
+ * exhausted, returns `limit + 1` (a value that can never equal a real
+ * solution count) so callers treat it as "not verified unique" rather than
+ * risking a false positive. `grid` is restored before returning.
  */
 export function countSolutions(grid: Grid, limit = 2, nodeBudget = 20000): number {
+  const rowUsed = new Array<number>(SIZE).fill(0);
+  const colUsed = new Array<number>(SIZE).fill(0);
+  const boxUsed = new Array<number>(SIZE).fill(0);
+  const boxOf = (row: number, col: number) => Math.floor(row / BOX_SIZE) * BOX_SIZE + Math.floor(col / BOX_SIZE);
+
+  const empties: number[] = [];
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const value = grid[r][c];
+      if (value === 0) {
+        empties.push(r * SIZE + c);
+      } else {
+        rowUsed[r] |= 1 << value;
+        colUsed[c] |= 1 << value;
+        boxUsed[boxOf(r, c)] |= 1 << value;
+      }
+    }
+  }
+
   let nodes = 0;
   let budgetExceeded = false;
 
@@ -105,16 +109,42 @@ export function countSolutions(grid: Grid, limit = 2, nodeBudget = 20000): numbe
       return 0;
     }
 
-    const cell = findMinCandidateCell(grid);
-    if (!cell) return 1; // fully filled: one solution along this branch
-    if (cell.candidates.length === 0) return 0; // dead end
+    let bestPos = -1;
+    let bestMask = 0;
+    let bestCount = SIZE + 1;
+    for (const pos of empties) {
+      const r = Math.floor(pos / SIZE);
+      const c = pos % SIZE;
+      if (grid[r][c] !== 0) continue;
+      const mask = ALL_CANDIDATES & ~(rowUsed[r] | colUsed[c] | boxUsed[boxOf(r, c)]);
+      const count = popcount(mask);
+      if (count < bestCount) {
+        bestPos = pos;
+        bestMask = mask;
+        bestCount = count;
+        if (count <= 1) break; // can't do better than a forced/dead cell
+      }
+    }
+    if (bestPos === -1) return 1; // fully filled: one solution along this branch
+    if (bestCount === 0) return 0; // dead end
 
+    const row = Math.floor(bestPos / SIZE);
+    const col = bestPos % SIZE;
+    const box = boxOf(row, col);
     let count = 0;
-    for (const value of cell.candidates) {
+    for (const value of DIGITS) {
+      const bit = 1 << value;
+      if (!(bestMask & bit)) continue;
       if (count >= remainingLimit) break;
-      grid[cell.row][cell.col] = value;
+      grid[row][col] = value;
+      rowUsed[row] |= bit;
+      colUsed[col] |= bit;
+      boxUsed[box] |= bit;
       count += search(remainingLimit - count);
-      grid[cell.row][cell.col] = 0;
+      rowUsed[row] &= ~bit;
+      colUsed[col] &= ~bit;
+      boxUsed[box] &= ~bit;
+      grid[row][col] = 0;
       if (budgetExceeded) break;
     }
     return count;
@@ -122,6 +152,28 @@ export function countSolutions(grid: Grid, limit = 2, nodeBudget = 20000): numbe
 
   const count = search(limit);
   return budgetExceeded ? limit + 1 : count;
+}
+
+/**
+ * Given a puzzle that was uniquely solvable before `(row, col)` was cleared
+ * (its old value being `original`), checks whether it still is. Any second
+ * solution must put a different value in that cell, so instead of counting
+ * solutions from scratch this only searches for one with `original` excluded
+ * there — and skips the search entirely when naked/hidden singles already
+ * solve the puzzle, which is the common case while plenty of givens remain.
+ * Running out of search budget counts as "not unique" (conservative).
+ */
+function staysUniqueAfterRemoving(puzzle: Grid, row: number, col: number, original: number): boolean {
+  if (logicalSolveGap(puzzle) === 0) return true;
+
+  const probe = puzzle.map((r) => [...r]);
+  for (const value of DIGITS) {
+    if (value === original || !canPlace(probe, row, col, value)) continue;
+    probe[row][col] = value;
+    if (countSolutions(probe, 1) > 0) return false;
+    probe[row][col] = 0;
+  }
+  return true;
 }
 
 /**
@@ -147,8 +199,7 @@ export function digHolesOrdered(solved: Grid, minGivens: number): [row: number, 
     const backup = puzzle[row][col];
     puzzle[row][col] = 0;
 
-    const probe = puzzle.map((r) => [...r]);
-    if (countSolutions(probe, 2) === 1) {
+    if (staysUniqueAfterRemoving(puzzle, row, col, backup)) {
       givens--;
       removalOrder.push([row, col]);
     } else {
