@@ -1,22 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { generatePuzzle } from '../game/generator';
-import type { CellPosition, Difficulty, Grid } from '../game/types';
+import { createEmptyGrid } from '../game/sudokuCore';
+import type { CellPosition, Difficulty, Grid, SudokuPuzzle } from '../game/types';
 import { findConflicts, isBoardSolved } from '../game/validator';
+
+function emptyPuzzle(difficulty: Difficulty): SudokuPuzzle {
+  return { puzzle: createEmptyGrid(), solution: createEmptyGrid(), difficulty };
+}
 
 export function useSudoku(initialDifficulty: Difficulty = 'easy') {
   const [difficulty, setDifficulty] = useState<Difficulty>(initialDifficulty);
-  const [puzzle, setPuzzle] = useState(() => generatePuzzle(initialDifficulty));
-  const [board, setBoard] = useState<Grid>(() => puzzle.puzzle.map((row) => [...row]));
+  // The first puzzle is generated after mount (see the effect below), so the
+  // initial render shows an empty board with the "generating" spinner instead
+  // of blocking first paint on puzzle generation.
+  const [puzzle, setPuzzle] = useState<SudokuPuzzle>(() => emptyPuzzle(initialDifficulty));
+  const [board, setBoard] = useState<Grid>(createEmptyGrid);
   const [selected, setSelected] = useState<CellPosition | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(true);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const startedAtRef = useRef(0);
   const generationToken = useRef(0);
-
-  useEffect(() => {
-    startedAtRef.current = Date.now();
-  }, []);
 
   const givenMask = useMemo(
     () => puzzle.puzzle.map((row) => row.map((value) => value !== 0)),
@@ -30,15 +34,11 @@ export function useSudoku(initialDifficulty: Difficulty = 'easy') {
   // synchronously would freeze the whole UI with no feedback, so it's
   // deferred a tick behind `isGenerating` flipping on, letting a spinner
   // paint first instead of the page silently hanging.
-  const newGame = useCallback((nextDifficulty: Difficulty) => {
+  const scheduleGeneration = useCallback((nextDifficulty: Difficulty) => {
     const token = ++generationToken.current;
-    setDifficulty(nextDifficulty);
-    setIsGenerating(true);
-    setSelected(null);
-
     window.setTimeout(() => {
-      const next = generatePuzzle(nextDifficulty);
       if (generationToken.current !== token) return; // superseded by a newer request
+      const next = generatePuzzle(nextDifficulty);
       setPuzzle(next);
       setBoard(next.puzzle.map((row) => [...row]));
       startedAtRef.current = Date.now();
@@ -46,6 +46,23 @@ export function useSudoku(initialDifficulty: Difficulty = 'easy') {
       setIsGenerating(false);
     }, 30);
   }, []);
+
+  const newGame = useCallback(
+    (nextDifficulty: Difficulty) => {
+      setDifficulty(nextDifficulty);
+      setIsGenerating(true);
+      setSelected(null);
+      scheduleGeneration(nextDifficulty);
+    },
+    [scheduleGeneration],
+  );
+
+  // Generate the first puzzle once mounted (state already starts out as
+  // "generating"). Under StrictMode this effect runs twice, but the
+  // generation token makes the first request a no-op.
+  useEffect(() => {
+    scheduleGeneration(initialDifficulty);
+  }, [scheduleGeneration, initialDifficulty]);
 
   useEffect(() => {
     if (solved || isGenerating) return;
