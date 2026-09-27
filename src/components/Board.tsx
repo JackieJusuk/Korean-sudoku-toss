@@ -52,7 +52,7 @@ export function Board({ board, givenMask, selected, conflicts, onSelectCell, dis
                 onClick={() => onSelectCell(r, c)}
                 aria-selected={isSelected}
                 aria-readonly={isGiven}
-                disabled={isGiven || disabled}
+                disabled={disabled}
               >
                 {digitToJamo(value)}
               </button>

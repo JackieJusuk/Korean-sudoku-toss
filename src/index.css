@@ -41,7 +41,12 @@ body {
 
 .app {
   min-height: 100vh;
-  padding: calc(env(safe-area-inset-top, 0px) + 48px) 16px calc(env(safe-area-inset-bottom, 0px) + 24px);
+  /* --safe-* come from the App-in-Toss SDK (see platform/toss.ts); env() covers plain browsers. */
+  padding:
+    calc(max(var(--safe-top, 0px), env(safe-area-inset-top, 0px)) + 48px)
+    calc(max(var(--safe-right, 0px), env(safe-area-inset-right, 0px)) + 16px)
+    calc(max(var(--safe-bottom, 0px), env(safe-area-inset-bottom, 0px)) + 24px)
+    calc(max(var(--safe-left, 0px), env(safe-area-inset-left, 0px)) + 16px);
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -133,6 +138,17 @@ body {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 6px 12px;
+}
+
+.stats {
+  flex: 1;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .new-game-button {
@@ -276,6 +292,11 @@ body {
   background: color-mix(in srgb, var(--color-success-bg) 92%, transparent);
   color: var(--color-success-text);
   font-size: 1.1rem;
+}
+
+.solved-detail {
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .spinner {
