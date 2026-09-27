@@ -18,10 +18,14 @@
 npm install
 npm run dev       # 로컬 브라우저에서 확인 (우측 하단 AIT Devtools로 미니앱 동작 테스트)
 npm run build      # 프로덕션 빌드 + 앱인토스 .ait 번들 생성 (프로젝트 루트에 생성됨)
+npm test           # 게임 로직 단위 테스트 (Vitest)
+npm run lint       # oxlint
 ```
 
 > ⚠️ App-in-Toss CLI(`@apps-in-toss/cli`, `@apps-in-toss/devtools`)는 **Node.js 24 이상**을 요구합니다.
-> `nvm install 24 && nvm use 24` 로 전환 후 설치/빌드해 주세요.
+> 저장소의 `.nvmrc`에 맞춰 `nvm install && nvm use` 로 전환 후 설치/빌드해 주세요.
+> `package.json`의 `engines`와 `.npmrc`의 `engine-strict=true` 설정으로, Node 24 미만에서는
+> 빌드 도중 원인을 알기 어려운 오류가 나는 대신 `npm install` 단계에서 버전 오류로 바로 중단됩니다.
 
 ### 토스 앱 실기기 테스트 (QR)
 
@@ -44,6 +48,7 @@ src/
     logicalSolver.ts # 사람 풀이 기법(단일 후보) 시뮬레이션으로 실제 풀이 난이도 측정
     generator.ts     # 난이도별 퍼즐 생성 (generatePuzzle)
     validator.ts     # 행/열/박스 충돌 검사, 완성 여부 판정
+    __tests__/       # 게임 로직 단위 테스트 (Vitest)
   hooks/
     useSudoku.ts     # 보드 상태, 선택 셀, 입력 처리, 생성중 상태, 타이머
   components/
@@ -72,7 +77,12 @@ apps-in-toss.config.ts  # App-in-Toss 설정 (appName, navigationBar 등)
    드물게 발생할 수 있는 탐색 폭발을 방지하고 생성 시간을 항상 1초 이내로 제한합니다.
 
 새 게임 생성은 최대 약 1초 정도 걸릴 수 있어, 그동안 보드 위에 "퍼즐 만드는 중…" 스피너를 띄우고
-입력을 잠가 화면이 멈춘 것처럼 보이지 않도록 처리했습니다.
+입력을 잠가 화면이 멈춘 것처럼 보이지 않도록 처리했습니다. 앱을 처음 열 때도 마찬가지로, 첫 퍼즐은
+화면을 먼저 그린 뒤 생성하므로 첫 화면 표시가 퍼즐 생성 때문에 늦어지지 않습니다.
+
+생성은 무작위이며, 목표 구간에 맞는 후보를 끝내 찾지 못하면 가장 가까운 후보를 사용합니다.
+측정 결과(각 200회) 보통/어려움 퍼즐의 약 83~85%가 목표 구간에 들어갔고, 약 2~2.5%는 추측 없이
+풀리는 퍼즐로 생성되었습니다.
 
 ## 앱인토스 출시 체크리스트
 
